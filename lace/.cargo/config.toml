@@ -1,0 +1,23 @@
+[build]
+target = "aarch64-unknown-none"
+
+[target.aarch64-unknown-none]
+rustflags = [
+  # Linker settings
+  "-C", "linker=rust-lld",
+  "-C", "linker-flavor=ld.lld",
+  # "-C", "link-arg=-z noexecstack",
+  "-C", "link-arg=--gc-sections",
+  "-C", "link-arg=-nostdlib",
+  # Rust settings
+  "-Zpolonius"
+]
+runner = "./upload.sh"
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+
+[profile]
+dev.panic = "abort"
+release.panic = "abort"

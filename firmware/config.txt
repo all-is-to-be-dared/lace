@@ -1,0 +1,46 @@
+#XXX # For more options and information see
+#XXX # http://rptl.io/configtxt
+#XXX # Some settings may impact device functionality. See link above for details
+#XXX 
+#XXX # Uncomment some or all of these to enable the optional hardware interfaces
+#XXX #dtparam=i2c_arm=on
+#XXX #dtparam=i2s=on
+#XXX #dtparam=spi=on
+#XXX 
+#XXX # Enable audio (loads snd_bcm2835)
+#XXX dtparam=audio=on
+#XXX 
+#XXX # Additional overlays and parameters are documented
+#XXX # /boot/firmware/overlays/README
+#XXX 
+#XXX # Automatically load overlays for detected cameras
+#XXX camera_auto_detect=1
+#XXX 
+#XXX # Automatically load overlays for detected DSI displays
+#XXX display_auto_detect=1
+#XXX 
+#XXX # Automatically load initramfs files, if found
+#XXX auto_initramfs=1
+#XXX 
+#XXX # Enable DRM VC4 V3D driver
+#XXX dtoverlay=vc4-kms-v3d
+#XXX max_framebuffers=2
+#XXX 
+#XXX # Don't have the firmware create an initial video= setting in cmdline.txt.
+#XXX # Use the kernel's default instead.
+#XXX disable_fw_kms_setup=1
+
+# Run in 64-bit mode
+arm_64bit=1
+
+#XXX # Disable compensation for displays with overscan
+#XXX disable_overscan=1
+
+# Run as fast as firmware / board allows
+arm_boost=1
+
+[all]
+enable_uart=1
+
+# Enable debugging output from the second-stage bootloader (start4.elf)
+uart_2ndstage=1
