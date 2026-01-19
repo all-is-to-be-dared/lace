@@ -45,11 +45,6 @@ ENTRY(_start)
 ASSERT(DEFINED(_start), "lace: _start MUST be defined");
 
 /* SECTIONS ------------------------------------------------------------------------------------ */
-#if 0
-PHDRS {
-  text PT_LOAD FLAGS(7) ;
-}
-#endif
 
 SECTIONS {
   .text LACE_LOAD_ADDR (TYPE=SHT_PROGBITS) : {
