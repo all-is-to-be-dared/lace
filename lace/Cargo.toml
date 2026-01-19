@@ -10,6 +10,7 @@ test = false
 bench = false
 
 [dependencies]
+tock-registers = { path = "../tockreg" }
 
 [build-dependencies]
 cc = "1.2.53"

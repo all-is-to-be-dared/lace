@@ -2,5 +2,5 @@
 resolver = "3"
 members = [
   "lace",
-  "tock-register-interface"
+  "tockreg"
 ]
