@@ -1,0 +1,11 @@
+[package]
+name = "tockreg2"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+mmio-dynamic = []
+mmio-static = []
+default = ["mmio-dynamic", "mmio-static"]
+
+[dependencies]

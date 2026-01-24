@@ -2,3 +2,5 @@
 /target
 .idea
 docs/armv8a.pdf
+*.bin
+*.elf

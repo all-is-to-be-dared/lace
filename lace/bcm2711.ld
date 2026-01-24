@@ -5,7 +5,7 @@ AUTO_GENERATED_HEADER()
 
 /* u-boot : default load address is 0x100_0000 = 16M */
 /* #define LACE_LOAD_ADDR 0x1000000 */
-#define LACE_LOAD_ADDR 0x80000
+#define LACE_LOAD_ADDR 0x0
 
 /* armv8a : exception vector is 2K-aligned and 2K-size */
 #define VECTOR_ALIGN 2K
@@ -44,23 +44,34 @@ MEMORY {
 ENTRY(_start)
 ASSERT(DEFINED(_start), "lace: _start MUST be defined");
 
+/* STACK DEFINITION ---------------------------------------------------------------------------- */
+
+/* SAFETY: push is pre-indexed, so pushes to the stack will always be _below_ the initial stack
+           pointer */
+__lace_stack_start = 0x7f0000;
+__lace_stack_init  = 0x800000;
+__lace_stack_end   = 0x800000;
+
 /* SECTIONS ------------------------------------------------------------------------------------ */
 
 SECTIONS {
   .text LACE_LOAD_ADDR (TYPE=SHT_PROGBITS) : {
-    /* SAFETY: push is pre-indexed, so pushes to the stack will always be _below_ the initial stack
-               pointer */
-    __lace_stack_init = .;
-
-
     /* Mark the beginning of the executable */
     __lace_exec_start = .;
-
 
     /* This MUST contain the _start symbol */
     KEEP(*(.lace.start))
     . = ALIGN(ALIGN_INST);
 
+    ASSERT(. <= 0xf0, "_start procedure too long");
+    . = 0xf0;
+    __lace_safe_stub_words = .;
+    /* some kind of magic that we don't really care about but i nevertheless feel uneasy about
+       leaving out */
+    LONG(0x5afe570b);
+    LONG(0); /* stub version. */
+    LONG(0); /* device tree address */
+    LONG(0); /* kernel start address */
     
     /* Next, make space for the vector table: we want to make sure that the vector table is able to
        jump quickly to all (?) of the .text section */

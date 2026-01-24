@@ -63,4 +63,6 @@ base_name="$(basename "${elf_path}")"
 bin_path="${target_dir}/${base_name/.elf/}.bin"
 
 llvm-objcopy "${elf_path}" -O binary "${bin_path}"
+cp "${elf_path}" "./${base_name}.elf"
 cp "${bin_path}" .
+cp "${bin_path}" /private/tftpboot/lace.bin

@@ -1,229 +1,166 @@
 #![no_std]
 #![no_main]
-#![feature(stdarch_arm_barrier)]
+#![feature(stdarch_arm_barrier, stdarch_arm_hints)]
+#![feature(sync_unsafe_cell)]
+#![feature(fn_ptr_trait)]
+#![feature(likely_unlikely)]
 
-use core::arch::aarch64::__dsb;
+use core::{arch::aarch64::__dsb, ptr::NonNull};
 
-use tock_registers::Write as _;
+pub mod rt {
+    pub mod start;
+}
+pub mod peri {
+    pub mod sys_timer {
+        use core::{
+            arch::aarch64::{__dsb, SY},
+            hint::likely,
+            ops::Sub,
+            time::Duration,
+        };
 
-core::arch::global_asm!(
-    r#"
-.section ".lace.start", "ax"
-.globl _start
-_start:
-    mrs x0, MPIDR_EL1
-    and x0, x0, #3
-    cbz x0, 2f
-    adr x1, _spin0
-1:
-    wfe
-    ldr x2, [x1, x0, lsl #3]
-    cbz x2, 1b
-    b 3f
-2:
-    ldr x2, ={cpu0_start}
-3:
-    br x2
+        use tock_registers::Read as _;
 
-.globl _spin0, _spin1, _spin2, _spin3
-_spin0: .quad 0
-_spin1: .quad 0
-_spin2: .quad 0
-_spin3: .quad 0
-"#,
-    cpu0_start = sym cpu0_start2,
-);
+        tock_registers::register_bitfields![u32,
+            ControlStatus [
+                M3 3,
+                M2 2,
+                M1 1,
+                M0 0,
+            ],
+            CounterLow [ CNT OFFSET(0) NUMBITS(32) [] ],
+            CounterHigh [ CNT OFFSET(0) NUMBITS(32) [] ],
+            Compare [ CMP OFFSET(0) NUMBITS(32) [] ],
+        ];
+        tock_registers::peripheral! {
+            #[real(HwSysTimer)]
+            pub SysTimer {
+                0x00 => cs: ControlStatus::Register { Read, Write },
+                0x04 => clo: CounterLow::Register { Read },
+                0x08 => chi: CounterHigh::Register { Read },
+                0x0c => c0: Compare::Register { Read, Write },
+                0x10 => c1: Compare::Register { Read, Write },
+                0x14 => c2: Compare::Register { Read, Write },
+                0x18 => c3: Compare::Register { Read, Write }
+            }
+        }
+        pub fn floating_time_us() -> u64 {
+            unsafe { __dsb(SY) };
+            let sys_timer = HwSysTimer::from_addr(0xfe00_3000);
+            let mut hi = sys_timer.chi().read();
+            let ret = loop {
+                let lo = sys_timer.clo().read();
+                let hi2 = sys_timer.chi().read();
+                if likely(hi2 == hi) {
+                    break u64::from(hi) << 32 | u64::from(lo);
+                }
+                hi = hi2;
+            };
+            unsafe { __dsb(SY) };
+            ret
+        }
+        #[derive(Copy, Clone)]
+        pub struct Instant(u64);
+        impl Instant {
+            pub fn now() -> Self {
+                Self(floating_time_us())
+            }
+        }
+        impl Sub for Instant {
+            type Output = core::time::Duration;
 
-#[unsafe(naked)]
-#[unsafe(no_mangle)]
-pub extern "C" fn cpu0_start2() -> ! {
-    unsafe extern "C" {
-        static __lace_stack_init: [u128; 0];
-        static __lace_bss_start: [u64; 0];
-        static __lace_bss_end: [u64; 0];
+            fn sub(self, rhs: Self) -> Self::Output {
+                core::time::Duration::from_micros(self.0.wrapping_sub(rhs.0))
+            }
+        }
+
+        pub fn delay(duration: Duration) {
+            let now = Instant::now();
+            while (Instant::now() - now) < duration {}
+        }
     }
-    core::arch::naked_asm!(
-        r#"
-            // Initialize the stack
-            ldr x1, ={stack_init}
-            mov sp, x1
-
-            // Initialize the BSS
-            ldr x1, ={bss_start}
-            ldr x2, ={bss_end}
-            sub x3, x2, x1
-            cbz x3, 2f
-        1:
-            str xzr, [x1], #8
-            sub x3, x3, #8
-            cbnz x3, 1b
-        2:
-
-            // Jump to the kernel
-            b {kernel_entry}
-        "#,
-        stack_init = sym __lace_stack_init,
-        bss_start = sym __lace_bss_start,
-        bss_end = sym __lace_bss_end,
-        kernel_entry = sym cpu0_start3,
-    )
 }
 
-pub extern "C" fn cpu0_start3() -> ! {
-    // let gpset1 = 0xfe20_0020 as *mut u32;
-    // let gpclr1 = 0xfe20_002c as *mut u32;
-    // loop {
-    //     unsafe { gpset1.write_volatile(0xffff_ffff) }
-    //     for _ in 0..0x100_0000 {
-    //         unsafe { core::arch::asm!("") }
-    //     }
-    //     unsafe { gpclr1.write_volatile(0xffff_ffff) }
-    //     for _ in 0..0x100_0000 {
-    //         unsafe { core::arch::asm!("") }
-    //     }
-    // }
+// Called from rt::start::core0_entry
+#[unsafe(no_mangle)]
+extern "C" fn _lace_main() -> ! {
     let gpfsel1 = 0xfe20_0004 as *mut u32;
     unsafe { gpfsel1.write_volatile(gpfsel1.read_volatile() & !0o770000 | 0o440000) };
-
     unsafe { __dsb(core::arch::aarch64::SY) }
+    let uart_pointer = unsafe {
+        arm_pl011_uart::UniqueMmioPointer::new(NonNull::new(0xfe20_1000 as *mut _).unwrap())
+    };
+    let mut uart = arm_pl011_uart::Uart::new(uart_pointer);
+    let _ = uart.enable(
+        arm_pl011_uart::LineConfig {
+            data_bits: arm_pl011_uart::DataBits::Bits8,
+            parity: arm_pl011_uart::Parity::None,
+            stop_bits: arm_pl011_uart::StopBits::One,
+        },
+        6_000_000,
+        96_000_000, // set this up with init_uart_clock in config.txt
+    );
+    // okay, can now panic
 
-    // TODO: set up UART
-    // TODO: print with UART
+    // use core::fmt::Write as _;
+    // uart.write_str("Hello world from EL3 on the RPi4!\n");
+    // #[derive(Debug)]
+    // #[repr(C)]
+    // struct ArmStubWords {
+    //     /// This word is zeroed out by the firmware after it reads it.
+    //     magic: u32,
+    //     stub_version: u32,
+    //     /// The address (32-bit) of the DTB the firmware loaded
+    //     device_tree_addr32: u32,
+    //     /// The address (32-bit) of the kernel the firmware loaded
+    //     kernel_start_addr32: u32,
+    // }
+    // unsafe extern "C" {
+    //     static __lace_safe_stub_words: ArmStubWords;
+    // }
+    // writeln!(uart, "safe stub words: {:x?}", unsafe {
+    //     &__lace_safe_stub_words
+    // });
 
-    // default: UARTCLK @ 48MHz, so baud rate is at most 3MHz by default
-    // thus, we'll need to take the clock rate up to 96MHz
-
-    loop {}
-}
-
-fn summon_uart(no: u8) -> Option<HwPL011> {
-    if no == 1 || no >= 6 {
-        None
-    } else {
-        Some(HwPL011::from_addr(0xfe201000 + 0x200 * usize::from(no)))
-    }
-}
-
-tock_registers::register_bitfields![u32,
-    pub Data [
-        OE OFFSET(11) NUMBITS(1) [],
-        BE OFFSET(10) NUMBITS(1) [],
-        PE OFFSET(9) NUMBITS(1) [],
-        FE OFFSET(8) NUMBITS(1) [],
-        DATA OFFSET(0) NUMBITS(8) [],
-    ],
-    pub ReceiveStatusErrorClear [
-        OE 3,
-        BE 2,
-        PE 1,
-        FE 0,
-    ],
-    pub Flag [
-        RI 8,
-        TXFE 7,
-        RXFF 6,
-        TXFF 5,
-        RXFE 4,
-        BUSY 3,
-        CTS 0,
-    ],
-    // Baud rate divisor calculation:
-    //
-    //  BAUDDIV = FUARTCLK / (16 * Baud Rate)
-    pub IntegerBaudRateDivisor [
-        IBRD OFFSET(0) NUMBITS(16) [],
-    ],
-    pub FractionalBaudRateDivisor [
-        FBRD OFFSET(0) NUMBITS(6) [],
-    ],
-    pub LineControl [
-        SPS OFFSET(7) NUMBITS(1) [],
-        WLEN OFFSET(5) NUMBITS(2) [
-            _8 = 0b11,
-            _7 = 0b10,
-            _6 = 0b01,
-            _5 = 0b00,
-        ],
-        FEN OFFSET(4) NUMBITS(1) [],
-        STP2 OFFSET(3) NUMBITS(1) [],
-        EPS OFFSET(2) NUMBITS(1) [
-            Odd = 0,
-            Even = 1,
-        ],
-        PEN OFFSET(1) NUMBITS(1) [],
-        BRK OFFSET(0) NUMBITS(1) [],
-    ],
-    pub Control [
-        CTSEN 15,
-        RTSEN 14,
-        RTS 11,
-        RXE 9,
-        TXE 8,
-        LBE 7,
-        UARTEN 0,
-    ],
-    pub InterruptFifoLevelSelect [
-        RXIFPSEL OFFSET(9) NUMBITS(3) [],
-        TXIFPSEL OFFSET(6) NUMBITS(3) [],
-        RXIFLSEL OFFSET(3) NUMBITS(3) [],
-        TXIFLSEL OFFSET(0) NUMBITS(3) [],
-    ],
-    pub InterruptMaskSetClear [
-        OEIM 10,
-        BEIM 9,
-        PEIM 8,
-        FEIM 7,
-        RTIM 6,
-        TXIM 5,
-        RXIM 4,
-        CTSMIM 1,
-    ],
-    pub InterruptStatus [
-        OERIS 10,
-        BERIS 9,
-        PERIS 8,
-        FERIS 7,
-        RTRIS 6,
-        TXRIS 5,
-        RXRIS 4,
-        CTSRMIS 1,
-    ],
-    pub InterruptClear [
-        OEIC 10,
-        BEIC 9,
-        PEIC 8,
-        FEIC 7,
-        RTIC 6,
-        TXIC 5,
-        RXIC 4,
-        CTSMIC 1,
-    ],
-    pub DmaControl [
-        DMAONERR 2,
-        TXDMAE 1,
-        RXDMAE 0,
-    ],
-];
-tock_registers::peripheral! {
-    #[real(HwPL011)]
-    pub PL011 {
-        0x00 => dr : Data::Register { Read, Write },
-        0x04 => rsrecr : ReceiveStatusErrorClear::Register { Read, Write },
-        0x18 => fr : Flag::Register { Read },
-        0x24 => ibrd : IntegerBaudRateDivisor::Register { Read, Write },
-        0x28 => fbrd : FractionalBaudRateDivisor::Register { Read, Write },
-        0x2c => lcrh : LineControl::Register { Read, Write },
-        0x30 => cr : Control::Register { Read, Write },
-        0x34 => ifls : InterruptFifoLevelSelect::Register { Read, Write },
-        0x38 => imsc : InterruptMaskSetClear::Register { Read, Write },
-        0x3c => ris : InterruptStatus::Register { Read },
-        0x40 => mis : InterruptStatus::Register { Read },
-        0x44 => icr : InterruptClear::Register { Write },
-        0x48 => dmacr : DmaControl::Register { Read, Write },
+    loop {
+        core::hint::spin_loop()
     }
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+pub fn panic(info: &core::panic::PanicInfo) -> ! {
+    use core::fmt::Write as _;
+
+    // TODO(mc):
+    //  - check if we're in an interrupt
+    //  - disable interrupts if not, and drain out the (console) UART buffers
+
+    crate::peri::sys_timer::delay(core::time::Duration::from_secs(1));
+
+    // Fairly simple panic handler:
+    //  - print out where the panic occurred
+    //  - print out the panic message
+    //  - reboot the SoC
+
+    let uart_pointer = unsafe {
+        arm_pl011_uart::UniqueMmioPointer::new(NonNull::new(0xfe20_1000 as *mut _).unwrap())
+    };
+    let mut uart = arm_pl011_uart::Uart::new(uart_pointer);
+
+    if let Some(location) = info.location() {
+        let _ = writeln!(
+            uart,
+            "panic occurred in file '{}' at line '{}:'",
+            location.file(),
+            location.line()
+        );
+    } else {
+        // In the nightly at the time of writing, this branch is not reachable, but it's
+        // included for completeness.
+        let _ = writeln!(uart, "panic occurred but can't get location information!");
+    }
+    let _ = writeln!(uart, "{}", info.message());
+
+    // crate::rt::reboot();
     loop {}
 }

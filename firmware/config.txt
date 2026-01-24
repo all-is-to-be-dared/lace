@@ -35,12 +35,25 @@ arm_64bit=1
 
 #XXX # Disable compensation for displays with overscan
 #XXX disable_overscan=1
+#XXX 
+#XXX # Run as fast as firmware / board allows
+#XXX arm_boost=1
+#XXX 
+#XXX [cm4]
+#XXX # Enable host mode on the 2711 built-in XHCI USB controller.
+#XXX # This line should be removed if the legacy DWC2 controller is required
+#XXX # (e.g. for USB device mode) or if USB support is not required.
+#XXX otg_mode=1
+#XXX 
+#XXX [cm5]
+#XXX dtoverlay=dwc2,dr_mode=host
 
-# Run as fast as firmware / board allows
-arm_boost=1
+armstub=armstub8.bin
+enable_gic=1
+
+kernel=u-boot.bin
 
 [all]
-enable_uart=1
-
-# Enable debugging output from the second-stage bootloader (start4.elf)
-uart_2ndstage=1
+dtoverlay=disable-bt
+init_uart_clock=96000000
+# enable_uart=1
